@@ -3,11 +3,16 @@ import psycopg2
 import finnhub
 import os
 import time
+import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 
 load_dotenv()
+
+CHUNCK_SIZE = 60
+
+PROGRESS_FILE = "progress.json"
 
 # API_KEY= os.getenv("API_KEY")
 # URL= os.getenv("URL")
@@ -107,16 +112,16 @@ def fetch_historical(symbol, client, cur, days_back=30, resolution="D"):
             return
         
         for i in range(len(candles["t"])):
-            date = datetime.fromtimestamp(candles["t"]["i"]).date()
+            date = datetime.fromtimestamp(candles["t"][i]).date()
             cur.execute("""
-                INSERT INTO stocks_candles(symbol, current_price, high_price, low_price, open_price, previous_close)
+                INSERT INTO stocks_candles(symbol, date, open_price, high_price, low_price, close_price, volume)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (symbol, date) DO UPDATE SET
                     open _price = EXCLUDED.open_price,
                     high_price = EXCLUDED.high_price,
                     low_price = EXCLUDED.low_price,
                     close_price = EXCLUDED.close_price,
-                    volume = EXCLUDED.volume,
+                    volume = EXCLUDED.volume
             """,(
                 symbol,
                 date,
@@ -132,11 +137,44 @@ def fetch_historical(symbol, client, cur, days_back=30, resolution="D"):
     except Exception as e:
         print(f"Erreur historique pour {symbol} : {e}")
 
+def load_progress():
+    if os.path.exists(PROGRESS_FILE):
+        with open(PROGRESS_FILE, "r") as f:
+            return json.load(f)
+    return {"completed_index":0}
+
+def save_progress(completed_index):
+    with open(PROGRESS_FILE, "w") as f:
+        json.dump({"completed_index": completed_index}, f)
 
 
 def main():
     finnhub_client = finnhub.Client(api_key=os.getenv("API_KEY"))
-    symbols = ["AAPL","MSFT", "GOOGL", "TSLA","EXCOF", ""]
+    symbols = ["NVDA", "AAPL", "GOOG", "MSFT", "AMZN", "TSM", "SPCX", "AVGO",
+    "2222.SR", "META", "TSLA", "005930.KS", "LLY", "MU", "BRK-B",
+    "000660.KS", "WMT", "JPM", "AMD", "ASML", "V", "JNJ", "XOM",
+    "INTC", "TCEHY", "MA", "AMAT", "CSCO", "ABBV", "CAT", "COST",
+    "LRCX", "BAC", "ORCL", "UNH", "601939.SS", "GE", "KO", "CVX",
+    "PG", "MS", "RO.SW", "HD", "HSBC", "ARM", "NFLX", "PLTR", "KLAC",
+    "IBM", "DELL", "TXN", "PANW", "BABA", "ANET", "MRVL", "QCOM",
+    "CRWD", "ADI", "SAP", "APP", "SHOP", "UBER", "AXP", "PEP",
+    "GS", "TMO", "MCD", "NOW", "LIN", "PFE", "NVO", "ACN",
+    "BKNG", "ISRG", "BLK", "ADBE", "SYK", "RTX", "ETN", "NEE",
+    "HON", "BA", "MDT", "C", "SCHW", "VRTX", "GOOGL", "CMCSA",
+    "AMGN", "LOW", "TJX", "DE", "CB", "MMC", "BMY", "APD",
+    "FI", "LMT", "WM", "MO"
+    ]
+
+    total = len(symbols)
+    progress = load_progress()
+    start = progress["completed_index"]
+
+    if start>= total:
+        print(f"Les {total} symboles ont été déjà traités.")
+        return
+    
+    end = min(start + CHUNCK_SIZE, total)
+    batch = symbols[start:end]
 
     conn=get_db_connection()
     cur=conn.cursor()
@@ -147,14 +185,24 @@ def main():
         conn.commit()
 
         ## Cotation en temps réel
-        for symbol in symbols:
+        for symbol in batch:
             fetch_and_insert(symbol, finnhub_client, cur)
         conn.commit()
 
         ## Donnée historiques
-        for symbols in symbols:
+        for symbol in batch:
             fetch_historical(symbol, finnhub_client, cur, days_back=90, resolution="D")
         conn.commit()
+
+        save_progress(end)
+
+        print(f"Terminé.{end}/{total} symboles traités jusqu'à présent")
+
+        if end < total :
+            print(f"{total-end} symboles restants - relance le script pour continuer.")
+        else:
+            print("Tous les symboles ont été traités !")
+
 
     finally:
         cur.close()
